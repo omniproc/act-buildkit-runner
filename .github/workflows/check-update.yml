@@ -64,13 +64,19 @@ jobs:
         if: steps.buildkit.outputs.latest != steps.current.outputs.current
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           NEW_VERSION: ${{ steps.buildkit.outputs.latest }}
         run: |
           set -euo pipefail
           
           # Create a new branch for the update
           BRANCH="buildkit-update-${NEW_VERSION}"
+          
+          # Check if branch or PR already exists (idempotency)
+          if git ls-remote --exit-code --heads origin "$BRANCH" &>/dev/null; then
+            echo "Branch $BRANCH already exists, skipping"
+            exit 0
+          fi
           
           # Configure git user for the commit
           git config user.name "github-actions[bot]"

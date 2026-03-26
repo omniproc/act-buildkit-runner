@@ -20,6 +20,7 @@ jobs:
       uses: actions/checkout@v6
     - name: read buildkit version
       id: buildkit
+      shell: bash
       run: |
         set -euo pipefail
         
