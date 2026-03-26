@@ -1,7 +1,10 @@
-name: Build OCI Image
+name: CI
+
+permissions:
+  contents: read
 
 on:
-  push:
+  pull_request:
     branches:
       - 'main'
 
@@ -13,14 +16,24 @@ jobs:
     env: 
       DOCKER_CONFIG: '~/.docker/'
     steps:
+    - name: checkout
+      uses: actions/checkout@v6
+    - name: read buildkit version
+      id: buildkit
+      run: |
+        set -euo pipefail
+        
+        # Read BuildKit version to pass as build arg
+        VERSION=$(tr -d '[:space:]' < BUILDKIT_VERSION)
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
     - name: buildx setup
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
       with:
         use: true
         platforms: linux/amd64,linux/arm64 
     - name: oci metadata
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: |
          ghcr.io/${{ github.repository }}
@@ -29,11 +42,11 @@ jobs:
         labels: |
           org.opencontainers.image.description=A buildkit runner
     - name: oci build
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       with:
-        context: "{{defaultContext}}"
+        context: .
         platforms: linux/arm64,linux/amd64
-        build-args: BUILDKIT_TAG=v0.15.1
+        build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
         push: false
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}

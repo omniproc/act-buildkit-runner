@@ -13,8 +13,24 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/omniproc/act-buildkit-runner:0.1.1
+      image: ghcr.io/omniproc/act-buildkit-runner:0.28.1
     steps: 
     - name: git checkout
-      uses: https://github.com/actions/checkout@v4
+      uses: actions/checkout@v6
 ```
+
+# Development
+
+## BuildKit Version
+
+Update `BUILDKIT_VERSION` to change the bundled BuildKit version (e.g., `v0.28.1`).
+
+## Releases
+
+Runner versions match BuildKit versions exactly. When `BUILDKIT_VERSION` is updated on main, a new release is automatically created with the same version tag.
+
+For example:
+- `BUILDKIT_VERSION` = `v0.28.1` → Runner release `v0.28.1`
+- `BUILDKIT_VERSION` = `v0.29.0` → Runner release `v0.29.0`
+
+See [.github/workflows/README.md](.github/workflows/README.md) for workflow details.

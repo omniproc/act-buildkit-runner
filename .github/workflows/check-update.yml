@@ -1,0 +1,91 @@
+name: Check Update
+
+on:
+  schedule:
+    # Run daily at 6:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get latest BuildKit release
+        id: buildkit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          
+          # Get latest stable release (exclude pre-releases like rc, beta, alpha)
+          LATEST=$(gh api repos/moby/buildkit/releases --jq '[.[] | select(.prerelease == false)][0].tag_name')
+          
+          # Validate version format (vX.Y.Z)
+          if [[ ! "$LATEST" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format: $LATEST"
+            exit 1
+          fi
+          
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest BuildKit release: $LATEST"
+
+      - name: Get current version
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          # Read current version from file and strip whitespace
+          CURRENT=$(tr -d '[:space:]' < BUILDKIT_VERSION)
+          
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Current version: $CURRENT"
+
+      - name: Update BUILDKIT_VERSION
+        if: steps.buildkit.outputs.latest != steps.current.outputs.current
+        shell: bash
+        env:
+          NEW_VERSION: ${{ steps.buildkit.outputs.latest }}
+        run: |
+          set -euo pipefail
+          
+          # Write the new version to the version file
+          printf '%s\n' "$NEW_VERSION" > BUILDKIT_VERSION
+          echo "Updated BUILDKIT_VERSION to $NEW_VERSION"
+
+      - name: Create Pull Request
+        if: steps.buildkit.outputs.latest != steps.current.outputs.current
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.buildkit.outputs.latest }}
+        run: |
+          set -euo pipefail
+          
+          # Create a new branch for the update
+          BRANCH="buildkit-update-${NEW_VERSION}"
+          
+          # Configure git user for the commit
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create branch, commit changes, and push
+          git checkout -b "$BRANCH"
+          git add BUILDKIT_VERSION
+          git commit -m "chore: update BuildKit to ${NEW_VERSION}"
+          git push -u origin "$BRANCH"
+          
+          # Create pull request with link to release notes
+          gh pr create \
+            --title "Update BuildKit to ${NEW_VERSION}" \
+            --body "Automated update to BuildKit ${NEW_VERSION}
+
+          Release notes: https://github.com/moby/buildkit/releases/tag/${NEW_VERSION}" \
+            --head "$BRANCH"
