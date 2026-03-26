@@ -1,4 +1,4 @@
-name: Build OCI Image
+name: Release Build
 
 on:
   push:
@@ -17,6 +17,11 @@ jobs:
     env: 
       DOCKER_CONFIG: '~/.docker/'
     steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: read buildkit version
+      id: buildkit
+      run: echo "version=$(cat BUILDKIT_VERSION)" >> $GITHUB_OUTPUT
     - name: buildx setup
       uses: docker/setup-buildx-action@v3
       with:
@@ -44,9 +49,9 @@ jobs:
     - name: oci build
       uses: docker/build-push-action@v6
       with:
-        context: "{{defaultContext}}"
+        context: .
         platforms: linux/arm64,linux/amd64
-        build-args: BUILDKIT_TAG=v0.15.1
+        build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
         # Only push package if triggered by tag and prevent anyone from creating tags using tag-protection for this repository
         # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-tag-protection-rules
         push: ${{ github.ref_type == 'tag' }}
