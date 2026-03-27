@@ -65,9 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           
-          # Create a new GitHub release with auto-generated notes
+          # Create a new GitHub release
           # This also creates the git tag which triggers the publish workflow
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
-            --notes "BuildKit runner with BuildKit v${VERSION}" \
-            --generate-notes
+            --notes "BuildKit runner with BuildKit v${VERSION}"
