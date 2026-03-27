@@ -8,7 +8,9 @@ A [`act`](https://github.com/nektos/act) runner based on [`catthehacker/ubuntu:a
 ```yaml
 name: Example
 on:
-  push
+  push:
+    branches:
+      - main
 jobs:
   test:
     runs-on: ubuntu-22.04

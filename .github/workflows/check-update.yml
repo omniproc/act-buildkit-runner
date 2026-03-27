@@ -89,9 +89,11 @@ jobs:
           git push -u origin "$BRANCH"
           
           # Create pull request with link to release notes
+          BODY="Automated update to BuildKit ${NEW_VERSION}
+
+          Release notes: https://github.com/moby/buildkit/releases/tag/${NEW_VERSION}"
+
           gh pr create \
             --title "Update BuildKit to ${NEW_VERSION}" \
-            --body "Automated update to BuildKit ${NEW_VERSION}
-
-          Release notes: https://github.com/moby/buildkit/releases/tag/${NEW_VERSION}" \
+            --body "${BODY}" \
             --head "$BRANCH"
