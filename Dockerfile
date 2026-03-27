@@ -9,7 +9,7 @@ RUN echo "TARGETARCH=${TARGETARCH}" && \
     mkdir /buildkit && \
     tar -C /buildkit -xzf "buildkit-${BUILDKIT_TAG}.linux-${TARGETARCH}.tar.gz"
 # cleanup layers
-# PersistentVolume privilege missmatch between act-runner and workflow pod currently stop us from using the less privileged runner variant
+# PersistentVolume privilege mismatch between act-runner and workflow pod currently stops us from using the less privileged runner variant
 #FROM ghcr.io/catthehacker/ubuntu:runner-22.04
 FROM ghcr.io/catthehacker/ubuntu:act-22.04
 LABEL org.opencontainers.image.title act-buildkit-runner
