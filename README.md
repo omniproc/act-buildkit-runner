@@ -13,7 +13,7 @@ on:
       - main
 jobs:
   test:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     container:
       image: ghcr.io/omniproc/act-buildkit-runner:0.28.1
     steps: 
