@@ -1,53 +1,58 @@
 name: CI
-
-permissions:
-  contents: read
+run-name: CI / ${{ github.event_name }}
 
 on:
   pull_request:
     branches:
       - 'main'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    container: 
-      image: catthehacker/ubuntu:act-22.04
-    env: 
+    runs-on: ubuntu-24.04
+    container:
+      image: catthehacker/ubuntu:act-24.04@sha256:9a257bf2cdeaf1070460687abce446ff2a4263a3112eb0efbe4f7d16ddfb83f5
+    env:
       DOCKER_CONFIG: '/root/.docker/'
     steps:
-    - name: checkout
-      uses: actions/checkout@v6
-    - name: read buildkit version
-      id: buildkit
-      shell: bash
-      run: |
-        set -euo pipefail
-        
-        # Read BuildKit version to pass as build arg
-        VERSION=$(tr -d '[:space:]' < BUILDKIT_VERSION)
-        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-    - name: buildx setup
-      uses: docker/setup-buildx-action@v4
-      with:
-        use: true
-        platforms: linux/amd64,linux/arm64 
-    - name: oci metadata
-      id: meta
-      uses: docker/metadata-action@v6
-      with:
-        images: |
-         ghcr.io/${{ github.repository }}
-        tags: |
-          type=sha,event=branch
-        labels: |
-          org.opencontainers.image.description=A buildkit runner
-    - name: oci build
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        platforms: linux/arm64,linux/amd64
-        build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
-        push: false
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Read BuildKit version
+        id: buildkit
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          # Read BuildKit version to pass as build arg
+          VERSION=$(tr -d '[:space:]' < BUILDKIT_VERSION)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          use: true
+          platforms: linux/amd64,linux/arm64
+      - name: OCI metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,event=branch
+          labels: |
+            org.opencontainers.image.description=A buildkit runner
+      - name: OCI build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64,linux/amd64
+          build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
