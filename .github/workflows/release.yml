@@ -1,4 +1,5 @@
-name: Build Release
+name: Release
+run-name: Release
 
 on:
   push:
@@ -7,14 +8,26 @@ on:
     paths:
       - 'BUILDKIT_VERSION'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Generate App token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Read BuildKit version
         id: version
@@ -42,7 +55,7 @@ jobs:
         id: check
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
@@ -60,7 +73,7 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail

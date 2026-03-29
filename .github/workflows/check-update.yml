@@ -1,4 +1,5 @@
 name: Check Update
+run-name: Check Update
 
 on:
   schedule:
@@ -6,21 +7,32 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:  # Allow manual trigger
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   check-update:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Generate App token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Get latest BuildKit release
         id: buildkit
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           
@@ -64,7 +76,7 @@ jobs:
         if: steps.buildkit.outputs.latest != steps.current.outputs.current
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           NEW_VERSION: ${{ steps.buildkit.outputs.latest }}
         run: |
           set -euo pipefail
@@ -78,9 +90,9 @@ jobs:
             exit 0
           fi
           
-          # Configure git user for the commit
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Configure git user for the commit (App bot identity)
+          git config user.name "omniproc-release[bot]"
+          git config user.email "271993169+omniproc-release[bot]@users.noreply.github.com"
           
           # Create branch, commit changes, and push
           git checkout -b "$BRANCH"
