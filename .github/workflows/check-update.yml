@@ -74,38 +74,13 @@ jobs:
 
       - name: Create Pull Request
         if: steps.buildkit.outputs.latest != steps.current.outputs.current
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          NEW_VERSION: ${{ steps.buildkit.outputs.latest }}
-        run: |
-          set -euo pipefail
-          
-          # Create a new branch for the update
-          BRANCH="buildkit-update-${NEW_VERSION}"
-          
-          # Check if branch or PR already exists (idempotency)
-          if git ls-remote --exit-code --heads origin "$BRANCH" &>/dev/null; then
-            echo "Branch $BRANCH already exists, skipping"
-            exit 0
-          fi
-          
-          # Configure git user for the commit (App bot identity)
-          git config user.name "omniproc-release[bot]"
-          git config user.email "271993169+omniproc-release[bot]@users.noreply.github.com"
-          
-          # Create branch, commit changes, and push
-          git checkout -b "$BRANCH"
-          git add BUILDKIT_VERSION
-          git commit -m "chore: update BuildKit to ${NEW_VERSION}"
-          git push -u origin "$BRANCH"
-          
-          # Create pull request with link to release notes
-          BODY="Automated update to BuildKit ${NEW_VERSION}
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: buildkit-update-${{ steps.buildkit.outputs.latest }}
+          commit-message: "chore: update BuildKit to ${{ steps.buildkit.outputs.latest }}"
+          title: "Update BuildKit to ${{ steps.buildkit.outputs.latest }}"
+          body: |
+            Automated update to BuildKit ${{ steps.buildkit.outputs.latest }}
 
-          Release notes: https://github.com/moby/buildkit/releases/tag/${NEW_VERSION}"
-
-          gh pr create \
-            --title "Update BuildKit to ${NEW_VERSION}" \
-            --body "${BODY}" \
-            --head "$BRANCH"
+            Release notes: https://github.com/moby/buildkit/releases/tag/${{ steps.buildkit.outputs.latest }}
