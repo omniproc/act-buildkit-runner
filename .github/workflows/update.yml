@@ -12,13 +12,15 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch: # Allow manual trigger
 
-# Only one update run at a time — a second push cancels the first.
+# Only one update run at a time — a second trigger cancels the first.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  # Transitive: release.yml → publish.yml needs packages:write, and GitHub
+  # caps a called workflow's GITHUB_TOKEN at the top-level caller's permissions.
   packages: write
 
 jobs:
@@ -30,8 +32,8 @@ jobs:
       versions: ${{ steps.diff.outputs.result }}
       latest: ${{ steps.latest.outputs.version }}
     steps:
-      # App token provides a clean identity for release creation and
-      # ensures git tags are properly attributed in the audit trail.
+      # App token for listing own releases. The same app's private key
+      # is forwarded to release.yml for tag and release creation.
       - name: Generate App token
         uses: actions/create-github-app-token@v3
         id: app-token
@@ -39,9 +41,22 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/npm
+
       # semver is used for robust version parsing and comparison.
+      # Locked via .github/npm/package-lock.json for integrity verification.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: .github/npm/package-lock.json
+
       - name: Install semver
-        run: npm install semver
+        run: npm ci --ignore-scripts --prefix .github/npm
 
       # Paginate all moby/buildkit releases and keep only stable versions
       # above MIN_VERSION. Returns a JSON array of version tags.
@@ -50,7 +65,7 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const semver = require('semver');
+            const semver = require('${{ github.workspace }}/.github/npm/node_modules/semver');
             // Only track releases newer than this floor.
             const MIN_VERSION = '0.28.0';
 
@@ -89,10 +104,13 @@ jobs:
       - name: Compute missing versions
         id: diff
         uses: actions/github-script@v8
+        env:
+          UPSTREAM: ${{ steps.upstream.outputs.result }}
+          EXISTING: ${{ steps.existing.outputs.result }}
         with:
           script: |
-            const upstream = ${{ steps.upstream.outputs.result }};
-            const existing = new Set(${{ steps.existing.outputs.result }});
+            const upstream = JSON.parse(process.env.UPSTREAM);
+            const existing = new Set(JSON.parse(process.env.EXISTING));
 
             const missing = upstream.filter(v => !existing.has(v));
 
@@ -115,10 +133,12 @@ jobs:
       - name: Compute latest version
         id: latest
         uses: actions/github-script@v8
+        env:
+          UPSTREAM: ${{ steps.upstream.outputs.result }}
         with:
           script: |
-            const semver = require('semver');
-            const upstream = ${{ steps.upstream.outputs.result }};
+            const semver = require('${{ github.workspace }}/.github/npm/node_modules/semver');
+            const upstream = JSON.parse(process.env.UPSTREAM);
 
             const latest = upstream.sort(semver.rcompare)[0];
             core.info(`Latest upstream version: ${latest}`);
@@ -139,4 +159,5 @@ jobs:
     with:
       version: ${{ matrix.version }}
       latest-version: ${{ needs.check.outputs.latest }}
-    secrets: inherit
+    secrets:
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

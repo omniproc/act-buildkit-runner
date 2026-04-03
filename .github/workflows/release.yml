@@ -17,6 +17,10 @@ on:
         required: false
         type: string
         default: ''
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        description: 'Private key for the Release App used to create releases'
+        required: true
   # Manual escape hatch for one-off releases.
   workflow_dispatch:
     inputs:
@@ -31,6 +35,8 @@ on:
 
 permissions:
   contents: read
+  # Transitive: publish.yml needs packages:write, and GitHub caps a called
+  # workflow's GITHUB_TOKEN at the caller's permissions.
   packages: write
 
 jobs:
@@ -96,4 +102,3 @@ jobs:
     with:
       version: ${{ inputs.version }}
       latest-version: ${{ inputs.latest-version }}
-    secrets: inherit

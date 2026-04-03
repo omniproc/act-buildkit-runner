@@ -19,18 +19,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    # Use the same container as publish.yml so CI and release builds
-    # share identical tooling (Docker, Buildx, etc.).
-    container:
-      image: catthehacker/ubuntu:act-24.04@sha256:9a257bf2cdeaf1070460687abce446ff2a4263a3112eb0efbe4f7d16ddfb83f5
-    env:
-      DOCKER_CONFIG: '/root/.docker/'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       # Resolve the BuildKit version from the latest release tag in this
       # repo, so CI always builds against the most recently published version.
+      # Also fetches per-arch tarball checksums from moby/buildkit for
+      # integrity verification during the Docker build.
       - name: Resolve BuildKit version
         id: buildkit
         uses: actions/github-script@v8
@@ -40,8 +36,23 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
             });
-            core.info(`Latest release: ${release.tag_name}`);
-            core.setOutput('version', release.tag_name);
+            const version = release.tag_name;
+            core.info(`Latest release: ${version}`);
+            core.setOutput('version', version);
+
+            const { data: bkRelease } = await github.rest.repos.getReleaseByTag({
+              owner: 'moby',
+              repo: 'buildkit',
+              tag: version,
+            });
+            for (const arch of ['amd64', 'arm64']) {
+              const name = `buildkit-${version}.linux-${arch}.tar.gz`;
+              const asset = bkRelease.assets.find(a => a.name === name);
+              if (!asset?.digest) throw new Error(`Missing digest for ${name}`);
+              const hash = asset.digest.replace('sha256:', '');
+              core.setOutput(`checksum-${arch}`, hash);
+              core.info(`${arch}: ${hash}`);
+            }
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
@@ -58,15 +69,21 @@ jobs:
           tags: |
             type=sha,event=branch
           labels: |
-            org.opencontainers.image.description=A buildkit runner
+            org.opencontainers.image.description=A BuildKit runner
 
       # Build only — never push from PRs.
+      # Read-only cache from main branch; PRs do not write cache to avoid
+      # cache poisoning from untrusted pull_request events.
       - name: OCI build
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64,linux/amd64
-          build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
+          build-args: |
+            BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
+            BUILDKIT_CHECKSUM_AMD64=${{ steps.buildkit.outputs.checksum-amd64 }}
+            BUILDKIT_CHECKSUM_ARM64=${{ steps.buildkit.outputs.checksum-arm64 }}
+          cache-from: type=gha
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

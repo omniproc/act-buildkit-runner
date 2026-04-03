@@ -1,0 +1,4 @@
+# Send only the Dockerfile as build context.
+# The build downloads BuildKit via wget — no other repo files are needed.
+*
+!Dockerfile

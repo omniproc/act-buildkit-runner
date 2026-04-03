@@ -41,11 +41,6 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    # Run inside the act runner image for consistent tooling (Docker, Buildx, etc.).
-    container:
-      image: catthehacker/ubuntu:act-24.04@sha256:9a257bf2cdeaf1070460687abce446ff2a4263a3112eb0efbe4f7d16ddfb83f5
-    env:
-      DOCKER_CONFIG: '/root/.docker/'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -105,7 +100,7 @@ jobs:
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
           labels: |
-            org.opencontainers.image.description=A buildkit runner
+            org.opencontainers.image.description=A BuildKit runner
 
       - name: OCI login
         if: steps.check.outputs.exists == 'false'
@@ -117,6 +112,31 @@ jobs:
           # https://docs.github.com/en/actions/security-guides/automatic-token-authentication
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Fetch per-arch tarball SHA-256 checksums from the upstream
+      # moby/buildkit release for integrity verification during the Docker build.
+      - name: Resolve BuildKit checksums
+        if: steps.check.outputs.exists == 'false'
+        id: checksum
+        uses: actions/github-script@v8
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          script: |
+            const version = process.env.VERSION;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: 'moby',
+              repo: 'buildkit',
+              tag: version,
+            });
+            for (const arch of ['amd64', 'arm64']) {
+              const name = `buildkit-${version}.linux-${arch}.tar.gz`;
+              const asset = release.assets.find(a => a.name === name);
+              if (!asset?.digest) throw new Error(`Missing digest for ${name}`);
+              const hash = asset.digest.replace('sha256:', '');
+              core.setOutput(`checksum-${arch}`, hash);
+              core.info(`${arch}: ${hash}`);
+            }
+
       # Build linux/amd64 + linux/arm64 and push to ghcr.io.
       - name: OCI build
         if: steps.check.outputs.exists == 'false'
@@ -124,7 +144,12 @@ jobs:
         with:
           context: .
           platforms: linux/arm64,linux/amd64
-          build-args: BUILDKIT_TAG=${{ inputs.version }}
+          build-args: |
+            BUILDKIT_TAG=${{ inputs.version }}
+            BUILDKIT_CHECKSUM_AMD64=${{ steps.checksum.outputs.checksum-amd64 }}
+            BUILDKIT_CHECKSUM_ARM64=${{ steps.checksum.outputs.checksum-arm64 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
