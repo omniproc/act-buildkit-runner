@@ -49,7 +49,7 @@ jobs:
       # semver is used for robust version parsing and comparison.
       # Locked via .github/npm/package-lock.json for integrity verification.
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
