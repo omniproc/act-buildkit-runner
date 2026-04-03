@@ -18,3 +18,12 @@ updates:
       prefix: "chore"
     labels:
       - "dependencies"
+  # Keep semver (used by update workflow) up to date
+  - package-ecosystem: "npm"
+    directory: "/.github/npm"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"

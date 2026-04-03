@@ -1,27 +1,50 @@
+# Creates a GitHub release (and its tag) for a single BuildKit version.
+# Called by update.yml for each missing version, or manually via workflow_dispatch.
+# Idempotent: if the release already exists, the job is a no-op.
 name: Release
-run-name: Release
+run-name: Release ${{ inputs.version }}
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'BUILDKIT_VERSION'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # Called from update.yml matrix.
+  workflow_call:
+    inputs:
+      version:
+        description: 'BuildKit version tag to release (e.g. v0.29.0)'
+        required: true
+        type: string
+      latest-version:
+        description: 'Highest upstream version — used for latest labels'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        description: 'Private key for the Release App used to create releases'
+        required: true
+  # Manual escape hatch for one-off releases.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'BuildKit version tag to release (e.g. v0.29.0)'
+        required: true
+        type: string
+      latest-version:
+        description: 'Highest upstream version — used for latest labels'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  # Transitive: publish.yml needs packages:write, and GitHub caps a called
+  # workflow's GITHUB_TOKEN at the caller's permissions.
+  packages: write
 
 jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
+      # App token provides a clean identity for release creation and ensures
+      # the git tag is properly attributed in the audit trail.
       - name: Generate App token
         uses: actions/create-github-app-token@v3
         id: app-token
@@ -29,57 +52,53 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      - name: Read BuildKit version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          # Read version from file and strip whitespace
-          VERSION=$(tr -d '[:space:]' < BUILDKIT_VERSION)
-          
-          # Strip 'v' prefix if present (v0.28.1 -> 0.28.1)
-          VERSION="${VERSION#v}"
-          
-          # Validate version format (X.Y.Z)
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version format: $VERSION"
-            exit 1
-          fi
-          
-          # Output version for use in subsequent steps
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Check if release exists
-        id: check
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          
-          # Check if a release with this version already exists
-          # This prevents duplicate releases on repeated pushes
-          if gh release view "v${VERSION}" &>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release v${VERSION} already exists, skipping"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create release
-        if: steps.check.outputs.exists == 'false'
-        shell: bash
+        uses: actions/github-script@v8
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          
-          # Create a new GitHub release
-          # This also creates the git tag which triggers the publish workflow
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --notes "BuildKit runner with BuildKit v${VERSION}"
+          VERSION: ${{ inputs.version }}
+          LATEST_VERSION: ${{ inputs.latest-version }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const version = process.env.VERSION;
+            const latestVersion = process.env.LATEST_VERSION;
+
+            // Idempotency guard: skip if the release already exists.
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: version,
+              });
+              core.info(`Release ${version} already exists, skipping`);
+              return;
+            } catch (err) {
+              // 404 means the release doesn't exist yet — continue to create it.
+              if (err.status !== 404) throw err;
+            }
+
+            // Creating the release also creates the git tag.
+            // make_latest prevents the race condition where an older version
+            // created after a newer one would be labeled 'Latest' by GitHub.
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: version,
+              name: version,
+              make_latest: version === latestVersion ? 'true' : 'false',
+              body: [
+                `[\`Act\`](https://github.com/nektos/act) runner based on [\`catthehacker/ubuntu:act\`](https://github.com/catthehacker/docker_images) with integrated BuildKit \`${version}\`.`,
+                '',
+                `Release notes: https://github.com/moby/buildkit/releases/tag/${version}`,
+              ].join('\n'),
+            });
+
+            core.info(`Created release ${version}`);
+
+  # Build and push the Docker image for this version.
+  publish:
+    needs: release
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: ${{ inputs.version }}
+      latest-version: ${{ inputs.latest-version }}

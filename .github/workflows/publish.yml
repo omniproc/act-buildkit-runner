@@ -1,13 +1,37 @@
+# Builds and pushes a multi-arch Docker image to ghcr.io for a given version.
+# Called by release.yml after creating a tag, or manually via workflow_dispatch.
+# Idempotent: skips the build if the image already exists in the registry.
 name: Publish
-run-name: Publish ${{ github.ref_name }}
+run-name: Publish ${{ inputs.version }}
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # Called from release.yml after tag creation.
+  workflow_call:
+    inputs:
+      version:
+        description: 'BuildKit version tag to publish (e.g. v0.29.0)'
+        required: true
+        type: string
+      latest-version:
+        description: 'Highest upstream version — used for latest Docker tag'
+        required: false
+        type: string
+        default: ''
+  # Manual escape hatch for one-off publishes.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'BuildKit version tag to publish (e.g. v0.29.0)'
+        required: true
+        type: string
+      latest-version:
+        description: 'Highest upstream version — used for latest Docker tag'
+        required: false
+        type: string
 
+# Queue (don't cancel) concurrent publishes — each version must be built.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
 
 permissions:
@@ -15,54 +39,54 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-24.04
-    container:
-      image: catthehacker/ubuntu:act-24.04@sha256:9a257bf2cdeaf1070460687abce446ff2a4263a3112eb0efbe4f7d16ddfb83f5
-    env:
-      DOCKER_CONFIG: '/root/.docker/'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Read BuildKit version
-        id: buildkit
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          # Read BuildKit version to pass as build arg
-          VERSION=$(tr -d '[:space:]' < BUILDKIT_VERSION)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Check if image exists
+        with:
+          ref: ${{ inputs.version }}
+
+      # Idempotency guard: if the image already exists in ghcr.io, skip the
+      # entire build. This prevents duplicate pushes on workflow re-runs.
+      - name: Check image exists
         id: check
         shell: bash
         env:
           REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          
-          # Extract version from tag (e.g., refs/tags/v0.28.1 -> 0.28.1)
-          TAG="${GITHUB_REF#refs/tags/v}"
-          
-          # Validate tag format
+
+          # Strip the leading "v" from the tag (e.g. v0.28.1 -> 0.28.1).
+          TAG="${VERSION#v}"
+
+          # Validate semver format to guard against malformed tags.
           if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid tag format: $TAG"
             exit 1
           fi
-          
-          # Check if image already exists in registry to avoid duplicate builds
+
+          # docker manifest inspect returns 0 if the image exists.
           if docker manifest inspect "ghcr.io/${REPO}:${TAG}" &>/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Image ghcr.io/${REPO}:${TAG} already exists, skipping build"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # All remaining steps are skipped if the image already exists.
       - name: Set up Buildx
         if: steps.check.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v4
         with:
           use: true
           platforms: linux/amd64,linux/arm64
+
+      # Generate OCI image tags: full semver (0.28.1) and major.minor (0.28).
+      # The major.minor tag is a moving tag that always points to the latest patch.
+      # The 'latest' tag is only added when this version matches the highest
+      # upstream version, as computed by the update workflow.
       - name: OCI metadata
         if: steps.check.outputs.exists == 'false'
         id: meta
@@ -70,29 +94,62 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=${{ inputs.version == inputs.latest-version }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
           labels: |
-            org.opencontainers.image.description=A buildkit runner
+            org.opencontainers.image.description=A BuildKit runner
+
       - name: OCI login
         if: steps.check.outputs.exists == 'false'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          # Use the built-in GitHub action token for authentication with ghcr
+          # Use the built-in GITHUB_TOKEN for ghcr.io authentication.
           # https://docs.github.com/en/actions/security-guides/automatic-token-authentication
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fetch per-arch tarball SHA-256 checksums from the upstream
+      # moby/buildkit release for integrity verification during the Docker build.
+      - name: Resolve BuildKit checksums
+        if: steps.check.outputs.exists == 'false'
+        id: checksum
+        uses: actions/github-script@v8
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          script: |
+            const version = process.env.VERSION;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: 'moby',
+              repo: 'buildkit',
+              tag: version,
+            });
+            for (const arch of ['amd64', 'arm64']) {
+              const name = `buildkit-${version}.linux-${arch}.tar.gz`;
+              const asset = release.assets.find(a => a.name === name);
+              if (!asset?.digest) throw new Error(`Missing digest for ${name}`);
+              const hash = asset.digest.replace('sha256:', '');
+              core.setOutput(`checksum-${arch}`, hash);
+              core.info(`${arch}: ${hash}`);
+            }
+
+      # Build linux/amd64 + linux/arm64 and push to ghcr.io.
       - name: OCI build
         if: steps.check.outputs.exists == 'false'
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64,linux/amd64
-          build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
-          # Only push package if triggered by tag and prevent anyone from creating tags using tag-protection for this repository
-          # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-tag-protection-rules
-          push: ${{ github.ref_type == 'tag' }}
+          build-args: |
+            BUILDKIT_TAG=${{ inputs.version }}
+            BUILDKIT_CHECKSUM_AMD64=${{ steps.checksum.outputs.checksum-amd64 }}
+            BUILDKIT_CHECKSUM_ARM64=${{ steps.checksum.outputs.checksum-arm64 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

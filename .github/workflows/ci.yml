@@ -1,3 +1,5 @@
+# PR verification workflow. Builds the Docker image (without pushing) to
+# catch Dockerfile or build-arg regressions before merging.
 name: CI
 run-name: CI / ${{ github.event_name }}
 
@@ -6,6 +8,7 @@ on:
     branches:
       - 'main'
 
+# Cancel older runs for the same PR to save runner minutes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,28 +19,57 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    container:
-      image: catthehacker/ubuntu:act-24.04@sha256:9a257bf2cdeaf1070460687abce446ff2a4263a3112eb0efbe4f7d16ddfb83f5
-    env:
-      DOCKER_CONFIG: '/root/.docker/'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Read BuildKit version
+
+      # Resolve the BuildKit version from the latest release tag in this
+      # repo, so CI always builds against the most recently published version.
+      # Also fetches per-arch tarball checksums from moby/buildkit for
+      # integrity verification during the Docker build.
+      # If no release exists yet (fresh repo), the build step is skipped.
+      - name: Resolve BuildKit version
         id: buildkit
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          # Read BuildKit version to pass as build arg
-          VERSION=$(tr -d '[:space:]' < BUILDKIT_VERSION)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1,
+            });
+            if (releases.length === 0) {
+              core.info('No releases found — skipping CI build');
+              core.setOutput('skip', 'true');
+              return;
+            }
+            const version = releases[0].tag_name;
+            core.info(`Latest release: ${version}`);
+            core.setOutput('version', version);
+
+            const { data: bkRelease } = await github.rest.repos.getReleaseByTag({
+              owner: 'moby',
+              repo: 'buildkit',
+              tag: version,
+            });
+            for (const arch of ['amd64', 'arm64']) {
+              const name = `buildkit-${version}.linux-${arch}.tar.gz`;
+              const asset = bkRelease.assets.find(a => a.name === name);
+              if (!asset?.digest) throw new Error(`Missing digest for ${name}`);
+              const hash = asset.digest.replace('sha256:', '');
+              core.setOutput(`checksum-${arch}`, hash);
+              core.info(`${arch}: ${hash}`);
+            }
+
       - name: Set up Buildx
+        if: steps.buildkit.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v4
         with:
           use: true
           platforms: linux/amd64,linux/arm64
+
       - name: OCI metadata
+        if: steps.buildkit.outputs.skip != 'true'
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -46,13 +78,22 @@ jobs:
           tags: |
             type=sha,event=branch
           labels: |
-            org.opencontainers.image.description=A buildkit runner
+            org.opencontainers.image.description=A BuildKit runner
+
+      # Build only — never push from PRs.
+      # Read-only cache from main branch; PRs do not write cache to avoid
+      # cache poisoning from untrusted pull_request events.
       - name: OCI build
+        if: steps.buildkit.outputs.skip != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64,linux/amd64
-          build-args: BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
+          build-args: |
+            BUILDKIT_TAG=${{ steps.buildkit.outputs.version }}
+            BUILDKIT_CHECKSUM_AMD64=${{ steps.buildkit.outputs.checksum-amd64 }}
+            BUILDKIT_CHECKSUM_ARM64=${{ steps.buildkit.outputs.checksum-arm64 }}
+          cache-from: type=gha
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
