@@ -1,0 +1,142 @@
+# Detects new upstream BuildKit releases (moby/buildkit) that this repo
+# hasn't released yet, then fans out to release.yml for each missing version.
+# Invariants:
+#   - Every new BuildKit release above MIN_VERSION gets a matching runner release.
+#   - Already-released versions are never recreated (set-diff, not "latest").
+name: Update
+run-name: Update
+
+on:
+  schedule:
+    # Run daily at 6:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+# Only one update run at a time — a second push cancels the first.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Compare upstream BuildKit releases against our own releases and
+  # output a JSON array of version tags we haven't released yet.
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      versions: ${{ steps.diff.outputs.result }}
+      latest: ${{ steps.latest.outputs.version }}
+    steps:
+      # App token provides a clean identity for release creation and
+      # ensures git tags are properly attributed in the audit trail.
+      - name: Generate App token
+        uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # semver is used for robust version parsing and comparison.
+      - name: Install semver
+        run: npm install semver
+
+      # Paginate all moby/buildkit releases and keep only stable versions
+      # above MIN_VERSION. Returns a JSON array of version tags.
+      - name: Fetch upstream releases
+        id: upstream
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const semver = require('semver');
+            // Only track releases newer than this floor.
+            const MIN_VERSION = '0.28.0';
+
+            const releases = await github.paginate(
+              github.rest.repos.listReleases,
+              { owner: 'moby', repo: 'buildkit' }
+            );
+
+            const versions = releases
+              .filter(r => !r.draft && !r.prerelease)
+              .map(r => r.tag_name)
+              .filter(tag => semver.valid(tag))
+              .filter(tag => semver.gt(tag, MIN_VERSION));
+
+            core.info(`Found ${versions.length} upstream versions above v${MIN_VERSION}`);
+            return versions;
+
+      # Paginate our own releases so we know which versions already exist.
+      - name: Fetch own releases
+        id: existing
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const releases = await github.paginate(
+              github.rest.repos.listReleases,
+              { owner: context.repo.owner, repo: context.repo.repo }
+            );
+
+            const tags = new Set(releases.map(r => r.tag_name));
+            core.info(`Found ${tags.size} existing releases`);
+            return [...tags];
+
+      # Set-diff: upstream \ existing = versions we still need to release.
+      # Also writes a summary table to the GitHub Actions job summary.
+      - name: Compute missing versions
+        id: diff
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const upstream = ${{ steps.upstream.outputs.result }};
+            const existing = new Set(${{ steps.existing.outputs.result }});
+
+            const missing = upstream.filter(v => !existing.has(v));
+
+            core.summary
+              .addHeading('Update Summary')
+              .addTable([
+                [{data: 'Metric', header: true}, {data: 'Count', header: true}],
+                ['Upstream versions', `${upstream.length}`],
+                ['Already released', `${existing.size}`],
+                ['Missing', `${missing.length}`],
+              ])
+              .write();
+
+            core.info(`${missing.length} new version(s) to release`);
+            return missing;
+
+      # Determine the highest upstream version. This is passed down to
+      # release.yml and publish.yml to decide GitHub release and Docker
+      # tag 'latest' labels without redundant API calls.
+      - name: Compute latest version
+        id: latest
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const semver = require('semver');
+            const upstream = ${{ steps.upstream.outputs.result }};
+
+            const latest = upstream.sort(semver.rcompare)[0];
+            core.info(`Latest upstream version: ${latest}`);
+            core.setOutput('version', latest);
+
+  # Fan out to release.yml for each missing version.
+  # max-parallel: 1 avoids race conditions when creating tags.
+  release:
+    needs: check
+    # Only run when there is at least one missing version.
+    if: fromJSON(needs.check.outputs.versions)[0] != null
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        version: ${{ fromJSON(needs.check.outputs.versions) }}
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ matrix.version }}
+      latest-version: ${{ needs.check.outputs.latest }}
+    secrets: inherit
