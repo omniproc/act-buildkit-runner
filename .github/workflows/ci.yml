@@ -30,7 +30,7 @@ jobs:
       # If no release exists yet (fresh repo), the build step is skipped.
       - name: Resolve BuildKit version
         id: buildkit
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const { data: releases } = await github.rest.repos.listReleases({
