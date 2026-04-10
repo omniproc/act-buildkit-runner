@@ -117,7 +117,7 @@ jobs:
       - name: Resolve BuildKit checksums
         if: steps.check.outputs.exists == 'false'
         id: checksum
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           VERSION: ${{ inputs.version }}
         with:

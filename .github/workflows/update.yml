@@ -62,7 +62,7 @@ jobs:
       # above MIN_VERSION. Returns a JSON array of version tags.
       - name: Fetch upstream releases
         id: upstream
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const semver = require('${{ github.workspace }}/.github/npm/node_modules/semver');
@@ -86,7 +86,7 @@ jobs:
       # Paginate our own releases so we know which versions already exist.
       - name: Fetch own releases
         id: existing
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -103,7 +103,7 @@ jobs:
       # Also writes a summary table to the GitHub Actions job summary.
       - name: Compute missing versions
         id: diff
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           UPSTREAM: ${{ steps.upstream.outputs.result }}
           EXISTING: ${{ steps.existing.outputs.result }}
@@ -132,7 +132,7 @@ jobs:
       # tag 'latest' labels without redundant API calls.
       - name: Compute latest version
         id: latest
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           UPSTREAM: ${{ steps.upstream.outputs.result }}
         with:
