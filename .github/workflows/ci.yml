@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Resolve the BuildKit version from the latest release tag in this
       # repo, so CI always builds against the most recently published version.
